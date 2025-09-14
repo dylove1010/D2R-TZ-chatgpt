@@ -24,14 +24,18 @@ def fetch_data():
         page.goto(FETCH_URL, wait_until="networkidle")
         page.wait_for_timeout(5000)  # 等待 JS 渲染
 
-        # 精准定位
-        try:
-            current_block = page.locator("text=Current Terror Zone:").first
-            next_block = page.locator("text=Next Terror Zone:").first
+        current_info, next_info = None, None
 
-            # 提取父容器附近的完整文本（避免只拿到标题）
-            current_info = current_block.evaluate("el => el.parentElement.innerText")
-            next_info = next_block.evaluate("el => el.parentElement.innerText")
+        try:
+            # 当前恐怖地带
+            current_block = page.locator("text=Current Terror Zone:").first
+            current_info = current_block.locator("xpath=following-sibling::*").all_inner_texts()
+            current_info = "\n".join([line.strip() for line in current_info if line.strip()])
+
+            # 下一个恐怖地带
+            next_block = page.locator("text=Next Terror Zone:").first
+            next_info = next_block.locator("xpath=following-sibling::*").all_inner_texts()
+            next_info = "\n".join([line.strip() for line in next_info if line.strip()])
 
         except Exception as e:
             logging.error(f"解析页面失败: {e}")
@@ -88,7 +92,7 @@ def scheduled_task():
 # -----------------------------
 if __name__ == "__main__":
     scheduler = BackgroundScheduler()
-    # 每小时推送一次
+    # 每小时整点推送一次
     scheduler.add_job(scheduled_task, 'cron', minute=0)
     scheduler.start()
     logging.info("Scheduler started")
@@ -96,7 +100,7 @@ if __name__ == "__main__":
     # 启动时立即推送一次
     scheduled_task()
 
-    # 保持 Flask-like 循环
+    # 保持程序运行
     try:
         while True:
             time.sleep(60)
