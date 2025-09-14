@@ -1,127 +1,88 @@
 import logging
 import requests
-import asyncio
-import os
-from apscheduler.schedulers.background import BackgroundScheduler
-from flask import Flask, request
-from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
+from apscheduler.schedulers.background import BackgroundScheduler
+from flask import Flask
 
-# 日志
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(level=logging.INFO)
 
-# 固定 WebHook URL
-WECHAT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b0bcfe46-3aa1-4071-afd5-da63be5a8644"
+WEBHOOK_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b0bcfe46-3aa1-4071-afd5-da63be5a8644"
+URL = "https://d2emu.com/tz-china"
 
-# Flask
 app = Flask(__name__)
+scheduler = BackgroundScheduler()
 
-async def fetch_terror_zone():
-    """抓取恐怖地带信息"""
+def fetch_tz():
+    logging.info("开始抓取恐怖地带信息...")
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=["--no-sandbox"])
-            page = await browser.new_page()
-            await page.goto("https://d2emu.com/tz-china", timeout=60000)
-
-            await page.wait_for_selector("header", timeout=30000)
-            content = await page.content()
-            await browser.close()
-
-        soup = BeautifulSoup(content, "html.parser")
-
-        current_zone = soup.select_one("#a2x")
-        next_zone = soup.select_one("#x2a")
-
-        current_zone_text = current_zone.get_text(separator="\n", strip=True) if current_zone else None
-        next_zone_text = next_zone.get_text(separator="\n", strip=True) if next_zone else None
-
-       def convert_time(div_id):
-    node = soup.select_one(div_id)
-    if not node:
-        return None
-    text = node.text.strip()
-    for fmt in ("%Y/%m/%d %H:%M:%S", "%m/%d/%Y, %I:%M:%S %p"):
-        try:
-            utc_time = datetime.strptime(text, fmt)
-            utc_time = utc_time.replace(tzinfo=timezone.utc)
-            beijing_time = utc_time.astimezone(timezone(timedelta(hours=8)))
-            return beijing_time.strftime("%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            continue
-    logging.warning("时间解析失败: %s", text)
-    return text
-
-        current_time = convert_time("#current-time")
-        next_time = convert_time("#next-time")
-
-        return current_zone_text, current_time, next_zone_text, next_time
-
+        res = requests.get(URL, timeout=15)
+        res.raise_for_status()
     except Exception as e:
-        logging.error("抓取失败: %s", e)
+        logging.warning("抓取失败: %s", e)
         return None, None, None, None
 
+    soup = BeautifulSoup(res.text, "html.parser")
+    current_zone = soup.select_one("#a2x")
+    next_zone = soup.select_one("#x2a")
+    current_time_div = soup.select_one("#current-time")
+    next_time_div = soup.select_one("#next-time")
 
-def send_to_wecom(message: str):
-    """推送企业微信"""
-    payload = {"msgtype": "text", "text": {"content": message}}
+    def convert_time(node):
+        if not node:
+            return None
+        text = node.text.strip()
+        for fmt in ("%Y/%m/%d %H:%M:%S", "%m/%d/%Y, %I:%M:%S %p"):
+            try:
+                utc_time = datetime.strptime(text, fmt)
+                utc_time = utc_time.replace(tzinfo=timezone.utc)
+                beijing_time = utc_time.astimezone(timezone(timedelta(hours=8)))
+                return beijing_time.strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
+        logging.warning("时间解析失败: %s", text)
+        return text
+
+    cur_time = convert_time(current_time_div)
+    next_time = convert_time(next_time_div)
+
+    cur_zone_text = current_zone.get_text(separator=" | ").strip() if current_zone else None
+    next_zone_text = next_zone.get_text(separator=" | ").strip() if next_zone else None
+
+    logging.info("抓取到的当前信息: %s %s", cur_zone_text, cur_time)
+    logging.info("抓取到的下一个信息: %s %s", next_zone_text, next_time)
+
+    return cur_zone_text, cur_time, next_zone_text, next_time
+
+def send_wecom(cur_zone, cur_time, next_zone, next_time):
+    msg = f"⏰ 当前恐怖地带: {cur_zone or '暂无信息'} {cur_time or ''}\n" \
+          f"➡️ 下一个恐怖地带: {next_zone or '暂无信息'} {next_time or ''}"
+    payload = {"msgtype": "text", "text": {"content": msg}}
     try:
-        resp = requests.post(WECHAT_WEBHOOK, json=payload)
-        logging.info("Sent message to WeCom, response: %s", resp.json())
+        r = requests.post(WEBHOOK_URL, json=payload, timeout=10)
+        logging.info("Sent message to WeCom, response: %s", r.json())
     except Exception as e:
-        logging.error("推送失败: %s", e)
-
-
-def build_message(current_zone, current_time, next_zone, next_time):
-    """构造消息"""
-    if not current_zone and not next_zone:
-        return "⚠️ 暂未找到恐怖地带信息，请检查页面解析。"
-
-    msg = []
-    msg.append("⏰ 当前恐怖地带:")
-    msg.append(f"{current_time or ''} {current_zone or ''}")
-
-    msg.append("\n➡️ 下一个恐怖地带:")
-    msg.append(f"{next_time or ''} {next_zone or ''}")
-
-    return "\n".join(msg)
-
+        logging.warning("发送失败: %s", e)
 
 def scheduled_task():
-    """定时任务"""
     logging.info("Scheduled task triggered")
-    current_zone, current_time, next_zone, next_time = asyncio.run(fetch_terror_zone())
-    message = build_message(current_zone, current_time, next_zone, next_time)
-    send_to_wecom(message)
+    cur_zone, cur_time, next_zone, next_time = fetch_tz()
+    # 无论是否抓到数据都推送，方便测试
+    send_wecom(cur_zone, cur_time, next_zone, next_time)
     logging.info("Scheduled task completed")
 
+scheduler.add_job(scheduled_task, 'interval', hours=1)
+scheduler.start()
 
-@app.route("/")
+@app.route('/')
 def index():
-    return "✅ D2R Terror Zone Tracker WeCom Bot is running!"
+    return "Terror Zone service running."
 
-
-@app.route("/test")
-def test_push():
-    """手动测试推送"""
+@app.route('/test')
+def test():
     logging.info("手动测试推送触发")
-    current_zone, current_time, next_zone, next_time = asyncio.run(fetch_terror_zone())
-    message = build_message(current_zone, current_time, next_zone, next_time)
-    send_to_wecom("[测试推送]\n" + message)
-    return "✅ 测试推送已发送"
-
-
-if __name__ == "__main__":
-    # 启动时立即推送一次
     scheduled_task()
+    return "Test push triggered."
 
-    # 定时任务
-    scheduler = BackgroundScheduler()
-    scheduler.add_job(scheduled_task, "interval", hours=1)
-    scheduler.start()
-
-    # Render 绑定端口
-    port = int(os.getenv("PORT", 10000))
-    logging.info(f"Starting Flask app on port {port}...")
-    app.run(host="0.0.0.0", port=port)
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=10000)
