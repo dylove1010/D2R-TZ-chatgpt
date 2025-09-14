@@ -1,116 +1,118 @@
 import logging
+import time
 import requests
-from datetime import datetime, timedelta
-from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
+from flask import Flask
 from playwright.sync_api import sync_playwright
 
-# ---------------- 配置 ----------------
-FETCH_URL = "https://d2emu.com/tz-china"
-WECHAT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b0bcfe46-3aa1-4071-afd5-da63be5a8644"
-TIMEZONE_OFFSET = 8  # 北京时间
-TEST_MODE = True  # True 表示测试推送
-
+# 配置日志
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(message)s')
 
+# 微信 Webhook
+WECHAT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b0bcfe46-3aa1-4071-afd5-da63be5a8644"
+
+# 页面 URL
+FETCH_URL = "https://d2emu.com/tz-china"
+
+# Flask app
 app = Flask(__name__)
 
-# ---------------- 抓取数据 ----------------
+# 测试模式
+TEST_MODE = True
+
 def fetch_data():
+    """
+    抓取当前和下一个恐怖地带信息
+    """
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             page = browser.new_page()
-            page.goto(FETCH_URL, wait_until="networkidle")
-
-            # 模拟点击切换到中文简体
+            logging.info(f"打开页面: {FETCH_URL}")
+            page.goto(FETCH_URL)
+            
+            # 等待页面网络空闲
+            page.wait_for_load_state("networkidle")
+            # 再等待 5 秒，确保 JS 渲染完成
+            page.wait_for_timeout(5000)
+            
+            # 尝试获取当前和下一个恐怖地带
             try:
-                lang_button = page.locator("text=中文简体")
-                if lang_button.count() > 0:
-                    lang_button.click()
-                    page.wait_for_timeout(2000)  # 等待语言切换
-            except Exception:
-                logging.info("未找到语言切换按钮或不需要切换")
+                current = page.query_selector("#a2x")
+                current_text = current.inner_text().strip() if current else None
+            except Exception as e:
+                logging.warning(f"抓取当前信息失败: {e}")
+                current_text = None
 
-            # 等待 div 渲染
-            page.wait_for_selector("#a2x", timeout=15000)
-            page.wait_for_selector("#x2a", timeout=15000)
+            try:
+                next_zone = page.query_selector("#x2a")
+                next_text = next_zone.inner_text().strip() if next_zone else None
+            except Exception as e:
+                logging.warning(f"抓取下一个信息失败: {e}")
+                next_text = None
 
-            current_info = page.locator("#a2x").inner_text().strip()
-            next_info = page.locator("#x2a").inner_text().strip()
-
-            logging.info(f"抓取到的当前信息:\n{current_info}")
-            logging.info(f"抓取到的下一个信息:\n{next_info}")
+            logging.info(f"抓取到的当前信息: {current_text}")
+            logging.info(f"抓取到的下一个信息: {next_text}")
 
             browser.close()
-            return current_info, next_info
+            return current_text, next_text
     except Exception as e:
-        logging.warning(f"抓取失败: {e}")
+        logging.error(f"抓取页面失败: {e}")
         return None, None
 
-# ---------------- 构建消息 ----------------
-def build_message(current, next_info):
-    if not current:
-        current = "未找到当前恐怖地带信息"
-    if not next_info:
-        next_info = "未找到下一个恐怖地带信息"
+def build_message():
+    """
+    构建要推送的消息
+    """
+    current, next_info = fetch_data()
+    
+    if not current and not next_info:
+        msg = "⚠️ 暂未抓取到恐怖地带信息"
+    else:
+        msg_lines = []
+        if current:
+            msg_lines.append(f"⏰ 当前恐怖地带:\n{current}")
+        if next_info:
+            msg_lines.append(f"➡️ 下一个恐怖地带:\n{next_info}")
+        msg = "\n\n".join(msg_lines)
+    logging.info(f"Built message: {msg}")
+    return msg
 
-    now_utc = datetime.utcnow()
-    beijing_time = now_utc + timedelta(hours=TIMEZONE_OFFSET)
-    time_str = beijing_time.strftime("%Y-%m-%d %H:%M:%S")
-
-    message = (
-        f"🕒 北京时间: {time_str}\n"
-        f"⚠️ 当前恐怖地带: {current}\n"
-        f"⚠️ 下一个恐怖地带: {next_info}"
-    )
-    logging.info(f"Built message: {message}")
-    return message
-
-# ---------------- 推送消息 ----------------
-def send_wecom_message(msg):
-    data = {
+def send_wechat_message(message):
+    """
+    推送到企业微信
+    """
+    payload = {
         "msgtype": "text",
         "text": {
-            "content": msg
+            "content": message
         }
     }
     try:
-        resp = requests.post(WECHAT_WEBHOOK, json=data)
+        resp = requests.post(WECHAT_WEBHOOK, json=payload)
         logging.info(f"Sent message to WeCom, response: {resp.json()}")
     except Exception as e:
-        logging.error(f"Failed to send message: {e}")
+        logging.error(f"发送微信消息失败: {e}")
 
-# ---------------- 定时任务 ----------------
 def scheduled_task():
+    """
+    定时任务
+    """
     logging.info("Scheduled task triggered")
-    current, next_info = fetch_data()
-
-    if not current and not next_info:
-        if TEST_MODE:
-            msg = "🔧 测试推送: 暂未抓取到恐怖地带信息"
-            send_wecom_message(msg)
-            logging.info("测试模式下发送空信息推送")
-        else:
-            logging.info("未抓取到有效信息，跳过推送")
-        return
-
-    msg = build_message(current, next_info)
-    send_wecom_message(msg)
+    msg = build_message()
+    if msg or TEST_MODE:
+        send_wechat_message(msg)
     logging.info("Scheduled task completed")
 
-# ---------------- Flask 健康检查 ----------------
-@app.route("/")
-def index():
-    return "OK"
-
-# ---------------- 启动 ----------------
 if __name__ == "__main__":
-    # APScheduler 后台定时任务，每小时抓取一次
+    # 启动调度器
     scheduler = BackgroundScheduler()
-    scheduler.add_job(scheduled_task, 'interval', hours=1, next_run_time=datetime.now())
+    scheduler.add_job(scheduled_task, "interval", hours=1, id="scheduled_task")
     scheduler.start()
     logging.info("Starting Flask app with scheduler...")
 
-    # Flask 绑定端口，Render Web Service 检测用
+    # 启动时强制推送一次
+    scheduled_task()
+
+    # Flask webservice 保持 Render 进程存活
     app.run(host="0.0.0.0", port=10000)
