@@ -4,11 +4,13 @@ from datetime import datetime, timedelta
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
 from playwright.sync_api import sync_playwright
+import threading
 
 # ---------------- 配置 ----------------
 FETCH_URL = "https://d2emu.com/tz-china"
 WECHAT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b0bcfe46-3aa1-4071-afd5-da63be5a8644"
 TIMEZONE_OFFSET = 8  # 北京时间偏移
+TEST_MODE = True  # True 表示启动时无内容也推送，用于测试
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(message)s')
 
@@ -16,35 +18,35 @@ app = Flask(__name__)
 
 # ---------------- 抓取数据 ----------------
 def fetch_data():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(FETCH_URL, wait_until="networkidle")
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(FETCH_URL, wait_until="networkidle")
 
-        # 等待目标 div 渲染完成
-        page.wait_for_selector("#a2x", timeout=8000)
-        page.wait_for_selector("#x2a", timeout=8000)
+            # 等待 div 渲染
+            page.wait_for_selector("#a2x", timeout=8000)
+            page.wait_for_selector("#x2a", timeout=8000)
 
-        current_info = page.locator("#a2x").inner_text().strip()
-        next_info = page.locator("#x2a").inner_text().strip()
+            current_info = page.locator("#a2x").inner_text().strip()
+            next_info = page.locator("#x2a").inner_text().strip()
 
-        # 输出日志
-        logging.info(f"抓取到的当前信息:\n{current_info}")
-        logging.info(f"抓取到的下一个信息:\n{next_info}")
+            logging.info(f"抓取到的当前信息:\n{current_info}")
+            logging.info(f"抓取到的下一个信息:\n{next_info}")
 
-        browser.close()
-        return current_info, next_info
+            browser.close()
+            return current_info, next_info
+    except Exception as e:
+        logging.warning(f"抓取失败: {e}")
+        return None, None
 
 # ---------------- 构建消息 ----------------
-def build_message():
-    current, next_info = fetch_data()
-    
+def build_message(current, next_info):
     if not current:
         current = "未找到当前恐怖地带信息"
     if not next_info:
         next_info = "未找到下一个恐怖地带信息"
 
-    # 获取北京时间
     now_utc = datetime.utcnow()
     beijing_time = now_utc + timedelta(hours=TIMEZONE_OFFSET)
     time_str = beijing_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -74,7 +76,18 @@ def send_wecom_message(msg):
 # ---------------- 定时任务 ----------------
 def scheduled_task():
     logging.info("Scheduled task triggered")
-    msg = build_message()
+    current, next_info = fetch_data()
+
+    if not current and not next_info:
+        if TEST_MODE:
+            msg = "🔧 测试推送: 暂未抓取到恐怖地带信息"
+            send_wecom_message(msg)
+            logging.info("测试模式下发送空信息推送")
+        else:
+            logging.info("未抓取到有效信息，跳过推送")
+        return
+
+    msg = build_message(current, next_info)
     send_wecom_message(msg)
     logging.info("Scheduled task completed")
 
@@ -85,14 +98,11 @@ def index():
 
 # ---------------- 启动 ----------------
 if __name__ == "__main__":
-    # APScheduler 后台定时任务
+    # APScheduler 后台定时任务，每小时抓取一次
     scheduler = BackgroundScheduler()
-    scheduler.add_job(scheduled_task, 'interval', hours=1, next_run_time=datetime.now())
+    scheduler.add_job(scheduled_task, 'interval', hours=1, next_run_time=datetime.now() + timedelta(seconds=5))
     scheduler.start()
     logging.info("Starting Flask app with scheduler...")
 
-    # 启动时立即执行一次
-    scheduled_task()
-
-    # Flask 绑定端口，让 Render Web Service 检测成功
+    # Flask 绑定端口，Render Web Service 检测用
     app.run(host="0.0.0.0", port=10000)
