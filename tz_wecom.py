@@ -67,7 +67,6 @@ def send_wecom(cur_zone, cur_time, next_zone, next_time):
 def scheduled_task():
     logging.info("Scheduled task triggered")
     cur_zone, cur_time, next_zone, next_time = fetch_tz()
-    # 无论是否抓到数据都推送，方便测试
     send_wecom(cur_zone, cur_time, next_zone, next_time)
     logging.info("Scheduled task completed")
 
