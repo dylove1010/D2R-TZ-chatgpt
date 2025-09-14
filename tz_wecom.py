@@ -25,20 +25,23 @@ def fetch_data_chinese():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
+        # 强制中文
         page.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
         page.goto("https://d2emu.com/tz-china", wait_until="networkidle")
         time.sleep(5)  # 等待 JS 渲染完成
 
+        # 抓取整个 body 的文本
         body_text = page.inner_text("body")
         logging.info("页面 body 文本前500字符:\n" + body_text[:500])
         browser.close()
 
     current_info, next_info = None, None
     for line in body_text.splitlines():
+        line = line.strip()
         if "当前恐怖地带" in line:
-            current_info = line.strip()
+            current_info = line
         elif "下一个恐怖地带" in line:
-            next_info = line.strip()
+            next_info = line
 
     logging.info(f"抓取到的当前: {current_info}, 下一个: {next_info}")
     return current_info, next_info
