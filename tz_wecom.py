@@ -4,13 +4,12 @@ from datetime import datetime, timedelta
 from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
 from playwright.sync_api import sync_playwright
-import threading
 
 # ---------------- 配置 ----------------
 FETCH_URL = "https://d2emu.com/tz-china"
 WECHAT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b0bcfe46-3aa1-4071-afd5-da63be5a8644"
-TIMEZONE_OFFSET = 8  # 北京时间偏移
-TEST_MODE = True  # True 表示启动时无内容也推送，用于测试
+TIMEZONE_OFFSET = 8  # 北京时间
+TEST_MODE = True  # True 表示测试推送
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(message)s')
 
@@ -24,9 +23,18 @@ def fetch_data():
             page = browser.new_page()
             page.goto(FETCH_URL, wait_until="networkidle")
 
+            # 模拟点击切换到中文简体
+            try:
+                lang_button = page.locator("text=中文简体")
+                if lang_button.count() > 0:
+                    lang_button.click()
+                    page.wait_for_timeout(2000)  # 等待语言切换
+            except Exception:
+                logging.info("未找到语言切换按钮或不需要切换")
+
             # 等待 div 渲染
-            page.wait_for_selector("#a2x", timeout=8000)
-            page.wait_for_selector("#x2a", timeout=8000)
+            page.wait_for_selector("#a2x", timeout=15000)
+            page.wait_for_selector("#x2a", timeout=15000)
 
             current_info = page.locator("#a2x").inner_text().strip()
             next_info = page.locator("#x2a").inner_text().strip()
@@ -100,7 +108,7 @@ def index():
 if __name__ == "__main__":
     # APScheduler 后台定时任务，每小时抓取一次
     scheduler = BackgroundScheduler()
-    scheduler.add_job(scheduled_task, 'interval', hours=1, next_run_time=datetime.now() + timedelta(seconds=5))
+    scheduler.add_job(scheduled_task, 'interval', hours=1, next_run_time=datetime.now())
     scheduler.start()
     logging.info("Starting Flask app with scheduler...")
 
