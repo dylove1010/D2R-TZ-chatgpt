@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 
 # WeCom 配置
-WECHAT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=替换成你自己的key"
+WECHAT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b0bcfe46-3aa1-4071-afd5-da63be5a8644"
 
 app = Flask(__name__)
 scheduler = BackgroundScheduler()
