@@ -22,43 +22,16 @@ def fetch_data():
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(FETCH_URL, wait_until="networkidle")
-        page.wait_for_timeout(5000)  # 等待 JS 渲染
+        page.wait_for_timeout(3000)  # 等待 JS 渲染
 
         current_info, next_info = None, None
 
         try:
             # 当前恐怖地带
-            current_table = page.locator("text=Current Terror Zone:").locator("xpath=following-sibling::table").first
-            current_info = []
-            for row in current_table.locator("tr").all():
-                cells = row.locator("td").all_inner_texts()
-                cells = [c.strip() for c in cells if c.strip()]
-                if cells:
-                    # 时间字段转换为北京时间
-                    try:
-                        dt = datetime.strptime(cells[0], "%m/%d/%Y, %I:%M:%S %p")
-                        dt = dt + timedelta(hours=8)
-                        cells[0] = dt.strftime("%Y-%m-%d %H:%M:%S")
-                    except:
-                        pass
-                    current_info.append(" | ".join(cells))
-            current_info = "\n".join(current_info)
+            current_info = page.locator("#a2x").inner_text().strip()
 
             # 下一个恐怖地带
-            next_table = page.locator("text=Next Terror Zone:").locator("xpath=following-sibling::table").first
-            next_info = []
-            for row in next_table.locator("tr").all():
-                cells = row.locator("td").all_inner_texts()
-                cells = [c.strip() for c in cells if c.strip()]
-                if cells:
-                    try:
-                        dt = datetime.strptime(cells[0], "%m/%d/%Y, %I:%M:%S %p")
-                        dt = dt + timedelta(hours=8)
-                        cells[0] = dt.strftime("%Y-%m-%d %H:%M:%S")
-                    except:
-                        pass
-                    next_info.append(" | ".join(cells))
-            next_info = "\n".join(next_info)
+            next_info = page.locator("#x2a").inner_text().strip()
 
         except Exception as e:
             logging.error(f"解析页面失败: {e}")
@@ -78,7 +51,11 @@ def build_message():
     if not current or not next_info:
         return "⚠️ 暂未找到当前恐怖地带信息，请检查页面解析。"
 
-    msg = f"⚔️ 当前恐怖地带:\n{current}\n\n⏭️ 下一个恐怖地带:\n{next_info}"
+    # 时间戳
+    now = datetime.utcnow() + timedelta(hours=8)
+    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    msg = f"🕒 更新时间: {now_str} (北京时间)\n\n⚔️ 当前恐怖地带:\n{current}\n\n⏭️ 下一个恐怖地带:\n{next_info}"
     logging.info(f"Built message: {msg}")
     return msg
 
@@ -124,3 +101,4 @@ if __name__ == "__main__":
             time.sleep(60)
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
+        logging.info("Scheduler shutdown")
