@@ -109,5 +109,6 @@ def index():
 
 # -----------------------
 if __name__ == "__main__":
+    scheduled_task()
     # 启动 Flask
     app.run(host="0.0.0.0", port=10000)
