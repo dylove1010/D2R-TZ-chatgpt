@@ -17,24 +17,31 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(
 # 数据抓取函数
 # -----------------------------
 def fetch_data():
-    """抓取当前和下一个恐怖地带时间"""
+    """抓取当前和下一个恐怖地带信息（时间 + 地点/免疫）"""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(FETCH_URL, wait_until="networkidle")
-        time.sleep(5)  # 等待 JS 渲染
-        body_text = page.inner_text("body")
+        page.wait_for_timeout(5000)  # 等待 JS 渲染
+
+        # 精准定位
+        try:
+            current_block = page.locator("text=Current Terror Zone:").first
+            next_block = page.locator("text=Next Terror Zone:").first
+
+            # 提取父容器附近的完整文本（避免只拿到标题）
+            current_info = current_block.evaluate("el => el.parentElement.innerText")
+            next_info = next_block.evaluate("el => el.parentElement.innerText")
+
+        except Exception as e:
+            logging.error(f"解析页面失败: {e}")
+            browser.close()
+            return None, None
+
         browser.close()
 
-    current_info, next_info = None, None
-    for line in body_text.splitlines():
-        line = line.strip()
-        if "Current Terror Zone" in line:
-            current_info = line
-        elif "Next Terror Zone" in line:
-            next_info = line
-
-    logging.info(f"抓取到的当前: {current_info}, 下一个: {next_info}")
+    logging.info(f"抓取到的当前信息:\n{current_info}")
+    logging.info(f"抓取到的下一个信息:\n{next_info}")
     return current_info, next_info
 
 
@@ -46,7 +53,7 @@ def build_message():
     if not current or not next_info:
         return "⚠️ 暂未找到当前恐怖地带信息，请检查页面解析。"
 
-    msg = f"⚠️ 当前恐怖地带: {current}\n⚠️ 下一个恐怖地带: {next_info}"
+    msg = f"⚔️ 当前恐怖地带:\n{current}\n\n⏭️ 下一个恐怖地带:\n{next_info}"
     logging.info(f"Built message: {msg}")
     return msg
 
