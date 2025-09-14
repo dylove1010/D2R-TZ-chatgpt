@@ -4,7 +4,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask
 from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
-import time
+from datetime import datetime, timedelta
 
 # WeCom 配置
 WECHAT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=替换成你自己的key"
@@ -13,6 +13,19 @@ app = Flask(__name__)
 scheduler = BackgroundScheduler()
 
 logging.basicConfig(level=logging.INFO)
+
+
+def to_beijing_time(timestr: str):
+    """将网页时间字符串转为北京时间 (yyyy/MM/dd HH:mm:ss)"""
+    try:
+        # 页面时间格式示例: 2025/9/14 13:00:00 (UTC)
+        dt = datetime.strptime(timestr, "%Y/%m/%d %H:%M:%S")
+        # 转换为北京时间 (UTC+8)
+        bj_dt = dt + timedelta(hours=8)
+        return bj_dt.strftime("%Y/%m/%d %H:%M:%S")
+    except Exception:
+        return timestr
+
 
 def fetch_terror_zone():
     logging.info("开始抓取恐怖地带信息...")
@@ -41,8 +54,8 @@ def fetch_terror_zone():
         current_time = soup.select_one("#current-time")
         next_time = soup.select_one("#next-time")
 
-        current_time_text = current_time.get_text(strip=True) if current_time else None
-        next_time_text = next_time.get_text(strip=True) if next_time else None
+        current_time_text = to_beijing_time(current_time.get_text(strip=True)) if current_time else None
+        next_time_text = to_beijing_time(next_time.get_text(strip=True)) if next_time else None
 
         logging.info(f"抓取到的当前信息: {current_zone_text} {current_time_text}")
         logging.info(f"抓取到的下一个信息: {next_zone_text} {next_time_text}")
@@ -75,8 +88,8 @@ def scheduled_task():
     logging.info("Scheduled task completed")
 
 
-# 定时任务：每小时执行一次
-scheduler.add_job(scheduled_task, "interval", hours=1)
+# 定时任务：每 5 分钟执行一次（便于测试）
+scheduler.add_job(scheduled_task, "interval", minutes=1)
 scheduler.start()
 
 @app.route("/")
