@@ -2,6 +2,7 @@ import logging
 import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from playwright.sync_api import sync_playwright
+from datetime import datetime, timedelta
 import time
 
 # -----------------------------
@@ -12,12 +13,11 @@ FETCH_URL = "https://d2emu.com/tz-china"
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(message)s')
 
-
 # -----------------------------
 # 数据抓取函数
 # -----------------------------
 def fetch_data():
-    """抓取当前和下一个恐怖地带信息（时间 + 地点/免疫）"""
+    """抓取当前和下一个恐怖地带信息"""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
@@ -28,14 +28,37 @@ def fetch_data():
 
         try:
             # 当前恐怖地带
-            current_block = page.locator("text=Current Terror Zone:").first
-            current_info = current_block.locator("xpath=following-sibling::*").all_inner_texts()
-            current_info = "\n".join([line.strip() for line in current_info if line.strip()])
+            current_table = page.locator("text=Current Terror Zone:").locator("xpath=following-sibling::table").first
+            current_info = []
+            for row in current_table.locator("tr").all():
+                cells = row.locator("td").all_inner_texts()
+                cells = [c.strip() for c in cells if c.strip()]
+                if cells:
+                    # 时间字段转换为北京时间
+                    try:
+                        dt = datetime.strptime(cells[0], "%m/%d/%Y, %I:%M:%S %p")
+                        dt = dt + timedelta(hours=8)
+                        cells[0] = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except:
+                        pass
+                    current_info.append(" | ".join(cells))
+            current_info = "\n".join(current_info)
 
             # 下一个恐怖地带
-            next_block = page.locator("text=Next Terror Zone:").first
-            next_info = next_block.locator("xpath=following-sibling::*").all_inner_texts()
-            next_info = "\n".join([line.strip() for line in next_info if line.strip()])
+            next_table = page.locator("text=Next Terror Zone:").locator("xpath=following-sibling::table").first
+            next_info = []
+            for row in next_table.locator("tr").all():
+                cells = row.locator("td").all_inner_texts()
+                cells = [c.strip() for c in cells if c.strip()]
+                if cells:
+                    try:
+                        dt = datetime.strptime(cells[0], "%m/%d/%Y, %I:%M:%S %p")
+                        dt = dt + timedelta(hours=8)
+                        cells[0] = dt.strftime("%Y-%m-%d %H:%M:%S")
+                    except:
+                        pass
+                    next_info.append(" | ".join(cells))
+            next_info = "\n".join(next_info)
 
         except Exception as e:
             logging.error(f"解析页面失败: {e}")
@@ -43,11 +66,9 @@ def fetch_data():
             return None, None
 
         browser.close()
-
-    logging.info(f"抓取到的当前信息:\n{current_info}")
-    logging.info(f"抓取到的下一个信息:\n{next_info}")
-    return current_info, next_info
-
+        logging.info(f"抓取到的当前信息:\n{current_info}")
+        logging.info(f"抓取到的下一个信息:\n{next_info}")
+        return current_info, next_info
 
 # -----------------------------
 # 构建推送消息
@@ -60,7 +81,6 @@ def build_message():
     msg = f"⚔️ 当前恐怖地带:\n{current}\n\n⏭️ 下一个恐怖地带:\n{next_info}"
     logging.info(f"Built message: {msg}")
     return msg
-
 
 # -----------------------------
 # 发送企业微信消息
@@ -76,7 +96,6 @@ def send_wecom_message(msg):
     except Exception as e:
         logging.error(f"发送企业微信消息失败: {e}")
 
-
 # -----------------------------
 # 定时任务
 # -----------------------------
@@ -85,7 +104,6 @@ def scheduled_task():
     msg = build_message()
     send_wecom_message(msg)
     logging.info("Scheduled task completed")
-
 
 # -----------------------------
 # 启动 APScheduler
@@ -106,4 +124,3 @@ if __name__ == "__main__":
             time.sleep(60)
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
-        logging.info("Scheduler shutdown")
