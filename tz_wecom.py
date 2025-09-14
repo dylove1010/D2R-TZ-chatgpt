@@ -13,7 +13,7 @@ logging.basicConfig(
 )
 
 # 企业微信群机器人 Webhook 地址
-WEBHOOK_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxxxxxxx"
+WEBHOOK_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b0bcfe46-3aa1-4071-afd5-da63be5a8644"
 
 app = Flask(__name__)
 
