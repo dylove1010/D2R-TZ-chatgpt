@@ -37,18 +37,21 @@ async def fetch_terror_zone():
         current_zone_text = current_zone.get_text(separator="\n", strip=True) if current_zone else None
         next_zone_text = next_zone.get_text(separator="\n", strip=True) if next_zone else None
 
-        def convert_time(div_id):
-            node = soup.select_one(div_id)
-            if not node:
-                return None
-            try:
-                utc_time = datetime.strptime(node.text.strip(), "%Y/%m/%d %H:%M:%S")
-                utc_time = utc_time.replace(tzinfo=timezone.utc)
-                beijing_time = utc_time.astimezone(timezone(timedelta(hours=8)))
-                return beijing_time.strftime("%Y-%m-%d %H:%M:%S")
-            except Exception as e:
-                logging.warning("时间解析失败: %s", e)
-                return node.text.strip()
+       def convert_time(div_id):
+    node = soup.select_one(div_id)
+    if not node:
+        return None
+    text = node.text.strip()
+    for fmt in ("%Y/%m/%d %H:%M:%S", "%m/%d/%Y, %I:%M:%S %p"):
+        try:
+            utc_time = datetime.strptime(text, fmt)
+            utc_time = utc_time.replace(tzinfo=timezone.utc)
+            beijing_time = utc_time.astimezone(timezone(timedelta(hours=8)))
+            return beijing_time.strftime("%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+    logging.warning("时间解析失败: %s", text)
+    return text
 
         current_time = convert_time("#current-time")
         next_time = convert_time("#next-time")
