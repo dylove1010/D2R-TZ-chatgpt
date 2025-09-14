@@ -18,32 +18,50 @@ WEBHOOK_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b0bcfe46-3aa
 app = Flask(__name__)
 
 def fetch_data_chinese():
-    """用 Playwright 渲染页面，抓取简体中文的恐怖地带信息"""
+    import time
+    from playwright.sync_api import sync_playwright
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        # 模拟中文浏览器环境
-        page.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
-        page.goto("https://d2emu.com/tz-china", timeout=60000)
+        page.goto("https://d2emu.com/tz-china", wait_until="networkidle")
 
-        # 等待页面加载渲染
-        time.sleep(5)
+        # 等待 tz-data 表格加载
+        try:
+            page.wait_for_selector("table.tz-data", timeout=10000)
+        except Exception as e:
+            logging.error(f"等待表格超时: {e}")
+            browser.close()
+            return None, None
 
-        # 获取页面所有文字
-        body_text = page.inner_text("body")
+        # 截个 HTML 片段用于调试
+        html_content = page.content()
+        logging.info("页面 HTML 片段: " + html_content[:500])
+
+        # 提取表格数据
+        rows = page.query_selector_all("table.tz-data tr")
+        data = []
+        for row in rows:
+            cells = row.query_selector_all("td")
+            if len(cells) >= 2:
+                time_text = cells[0].inner_text().strip()
+                danger_text = cells[1].inner_text().strip()
+                data.append({"time": time_text, "danger": danger_text})
+
+        logging.info(f"提取到的行: {data}")
+
         browser.close()
 
-    logging.info("Fetched Chinese page content:")
-    logging.info(body_text)
-
+    # 提取当前和下一个恐怖地带
     current_info, next_info = None, None
-    for line in body_text.splitlines():
-        if "当前恐怖地带" in line:
-            current_info = line.strip()
-        elif "下一个恐怖地带" in line:
-            next_info = line.strip()
+    for row in data:
+        if "当前恐怖地带" in row["time"]:
+            current_info = row
+        elif "下一个恐怖地带" in row["time"]:
+            next_info = row
 
     return current_info, next_info
+
 
 def send_to_wecom(content: str):
     """推送消息到企业微信"""
