@@ -1,114 +1,89 @@
-# tz_wecom.py
 import logging
-from datetime import datetime, timedelta
 import requests
-from bs4 import BeautifulSoup
 from apscheduler.schedulers.background import BackgroundScheduler
 from flask import Flask
 from playwright.sync_api import sync_playwright
+from bs4 import BeautifulSoup
+import time
 
-# -----------------------
-# 配置
-WEBHOOK_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b0bcfe46-3aa1-4071-afd5-da63be5a8644"
-FETCH_URL = "https://d2emu.com/tz-china"
-TIMEZONE_OFFSET = 8  # 北京时间 UTC+8
+# WeCom 配置
+WECHAT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=替换成你自己的key"
 
-logging.basicConfig(level=logging.INFO)
-
-# -----------------------
 app = Flask(__name__)
 scheduler = BackgroundScheduler()
 
+logging.basicConfig(level=logging.INFO)
+
 def fetch_terror_zone():
     logging.info("开始抓取恐怖地带信息...")
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        page.goto(FETCH_URL)
-        try:
-            page.wait_for_selector("#a2x", timeout=10000)
-        except:
-            logging.warning("抓取失败: #a2x 未出现")
-        html = page.content()
-        browser.close()
 
-    soup = BeautifulSoup(html, "html.parser")
-
-    # 当前恐怖地带
-    current_zone_div = soup.find("div", id="a2x")
-    current_time_div = soup.find("div", id="current-time")
-    current_zone = current_zone_div.get_text(separator=" | ").strip() if current_zone_div else None
-    current_time = current_time_div.text.strip() if current_time_div else None
-
-    # 下一个恐怖地带
-    next_zone_div = soup.find("div", id="x2a")
-    next_time_div = soup.find("div", id="next-time")
-    next_zone = next_zone_div.get_text(separator=" | ").strip() if next_zone_div else None
-    next_time = next_time_div.text.strip() if next_time_div else None
-
-    # 时间转换为北京时间
-    def to_beijing(tstr):
-        try:
-            dt = datetime.strptime(tstr, "%Y/%m/%d %H:%M:%S")
-            dt += timedelta(hours=TIMEZONE_OFFSET)
-            return dt.strftime("%Y-%m-%d %H:%M:%S")
-        except:
-            return tstr
-
-    current_time = to_beijing(current_time) if current_time else None
-    next_time = to_beijing(next_time) if next_time else None
-
-    logging.info(f"抓取到的当前信息: {current_zone} {current_time}")
-    logging.info(f"抓取到的下一个信息: {next_zone} {next_time}")
-
-    return current_zone, current_time, next_zone, next_time
-
-def build_message():
-    current_zone, current_time, next_zone, next_time = fetch_terror_zone()
-    if not current_zone and not next_zone:
-        logging.info("未抓取到恐怖地带信息，跳过推送")
-        return None
-
-    msg = ""
-    if current_zone:
-        msg += f"⏰ 当前恐怖地带: {current_zone}\n时间: {current_time}\n"
-    if next_zone:
-        msg += f"➡️ 下一个恐怖地带: {next_zone}\n时间: {next_time}\n"
-    return msg
-
-def send_wecom(msg):
-    if not msg:
-        logging.info("消息为空，不发送")
-        return
-    data = {
-        "msgtype": "text",
-        "text": {"content": msg}
-    }
     try:
-        res = requests.post(WEBHOOK_URL, json=data)
-        logging.info(f"已发送消息到 WeCom, response: {res.json()}")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto("https://d2emu.com/tz-china", timeout=60000)
+
+            # 等待 header 出现
+            page.wait_for_selector("header", timeout=30000)
+            content = page.content()
+            browser.close()
+
+        soup = BeautifulSoup(content, "html.parser")
+
+        # 当前 & 下一个恐怖地带
+        current_zone = soup.select_one("#a2x")
+        next_zone = soup.select_one("#x2a")
+
+        current_zone_text = current_zone.get_text(strip=True) if current_zone else None
+        next_zone_text = next_zone.get_text(strip=True) if next_zone else None
+
+        # 时间
+        current_time = soup.select_one("#current-time")
+        next_time = soup.select_one("#next-time")
+
+        current_time_text = current_time.get_text(strip=True) if current_time else None
+        next_time_text = next_time.get_text(strip=True) if next_time else None
+
+        logging.info(f"抓取到的当前信息: {current_zone_text} {current_time_text}")
+        logging.info(f"抓取到的下一个信息: {next_zone_text} {next_time_text}")
+
+        return current_zone_text, current_time_text, next_zone_text, next_time_text
+
     except Exception as e:
-        logging.error(f"发送失败: {e}")
+        logging.warning(f"抓取失败: {e}")
+        return None, None, None, None
+
+
+def send_wecom_message(text: str):
+    headers = {"Content-Type": "application/json"}
+    payload = {"msgtype": "text", "text": {"content": text}}
+    response = requests.post(WECHAT_WEBHOOK, headers=headers, json=payload)
+    logging.info(f"Sent message to WeCom, response: {response.json()}")
+
 
 def scheduled_task():
     logging.info("Scheduled task triggered")
-    msg = build_message()
-    send_wecom(msg)
+    current_zone, current_time, next_zone, next_time = fetch_terror_zone()
+
+    # 即使抓取为空，也推送（便于测试）
+    message = (
+        f"当前恐怖地带: {current_zone or '未获取'} ({current_time or '未知'})\n"
+        f"下一个恐怖地带: {next_zone or '未获取'} ({next_time or '未知'})"
+    )
+
+    send_wecom_message(message)
     logging.info("Scheduled task completed")
 
-# -----------------------
-# APScheduler 定时任务: 每小时执行一次
-scheduler.add_job(scheduled_task, 'interval', hours=1)
+
+# 定时任务：每小时执行一次
+scheduler.add_job(scheduled_task, "interval", hours=1)
 scheduler.start()
 
-# -----------------------
-# Flask webservice
 @app.route("/")
 def index():
-    return "D2R Terror Zone Tracker running"
+    return "D2R Terror Zone WeCom Bot is running!"
 
-# -----------------------
 if __name__ == "__main__":
-    scheduled_task()
-    # 启动 Flask
+    logging.info("Starting Flask app with scheduler...")
+    scheduled_task()  # 启动时立即运行一次，方便测试
     app.run(host="0.0.0.0", port=10000)
