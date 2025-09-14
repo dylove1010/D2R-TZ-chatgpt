@@ -1,104 +1,98 @@
 import logging
 import requests
+from datetime import datetime, timedelta
+from flask import Flask
 from apscheduler.schedulers.background import BackgroundScheduler
 from playwright.sync_api import sync_playwright
-from datetime import datetime, timedelta
-import time
 
-# -----------------------------
-# 配置区
-# -----------------------------
-WEBHOOK_URL = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b0bcfe46-3aa1-4071-afd5-da63be5a8644"
+# ---------------- 配置 ----------------
 FETCH_URL = "https://d2emu.com/tz-china"
+WECHAT_WEBHOOK = "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b0bcfe46-3aa1-4071-afd5-da63be5a8644"
+TIMEZONE_OFFSET = 8  # 北京时间偏移
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(message)s')
 
-# -----------------------------
-# 数据抓取函数
-# -----------------------------
+app = Flask(__name__)
+
+# ---------------- 抓取数据 ----------------
 def fetch_data():
-    """抓取当前和下一个恐怖地带信息"""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.goto(FETCH_URL, wait_until="networkidle")
-        page.wait_for_timeout(3000)  # 等待 JS 渲染
 
-        current_info, next_info = None, None
+        # 等待目标 div 渲染完成
+        page.wait_for_selector("#a2x", timeout=8000)
+        page.wait_for_selector("#x2a", timeout=8000)
 
-        try:
-            # 当前恐怖地带
-            current_info = page.locator("#a2x").inner_text().strip()
+        current_info = page.locator("#a2x").inner_text().strip()
+        next_info = page.locator("#x2a").inner_text().strip()
 
-            # 下一个恐怖地带
-            next_info = page.locator("#x2a").inner_text().strip()
-
-        except Exception as e:
-            logging.error(f"解析页面失败: {e}")
-            browser.close()
-            return None, None
-
-        browser.close()
+        # 输出日志
         logging.info(f"抓取到的当前信息:\n{current_info}")
         logging.info(f"抓取到的下一个信息:\n{next_info}")
+
+        browser.close()
         return current_info, next_info
 
-# -----------------------------
-# 构建推送消息
-# -----------------------------
+# ---------------- 构建消息 ----------------
 def build_message():
     current, next_info = fetch_data()
-    if not current or not next_info:
-        return "⚠️ 暂未找到当前恐怖地带信息，请检查页面解析。"
+    
+    if not current:
+        current = "未找到当前恐怖地带信息"
+    if not next_info:
+        next_info = "未找到下一个恐怖地带信息"
 
-    # 时间戳
-    now = datetime.utcnow() + timedelta(hours=8)
-    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    # 获取北京时间
+    now_utc = datetime.utcnow()
+    beijing_time = now_utc + timedelta(hours=TIMEZONE_OFFSET)
+    time_str = beijing_time.strftime("%Y-%m-%d %H:%M:%S")
 
-    msg = f"🕒 更新时间: {now_str} (北京时间)\n\n⚔️ 当前恐怖地带:\n{current}\n\n⏭️ 下一个恐怖地带:\n{next_info}"
-    logging.info(f"Built message: {msg}")
-    return msg
+    message = (
+        f"🕒 北京时间: {time_str}\n"
+        f"⚠️ 当前恐怖地带: {current}\n"
+        f"⚠️ 下一个恐怖地带: {next_info}"
+    )
+    logging.info(f"Built message: {message}")
+    return message
 
-# -----------------------------
-# 发送企业微信消息
-# -----------------------------
+# ---------------- 推送消息 ----------------
 def send_wecom_message(msg):
     data = {
         "msgtype": "text",
-        "text": {"content": msg}
+        "text": {
+            "content": msg
+        }
     }
     try:
-        resp = requests.post(WEBHOOK_URL, json=data, timeout=10)
+        resp = requests.post(WECHAT_WEBHOOK, json=data)
         logging.info(f"Sent message to WeCom, response: {resp.json()}")
     except Exception as e:
-        logging.error(f"发送企业微信消息失败: {e}")
+        logging.error(f"Failed to send message: {e}")
 
-# -----------------------------
-# 定时任务
-# -----------------------------
+# ---------------- 定时任务 ----------------
 def scheduled_task():
     logging.info("Scheduled task triggered")
     msg = build_message()
     send_wecom_message(msg)
     logging.info("Scheduled task completed")
 
-# -----------------------------
-# 启动 APScheduler
-# -----------------------------
-if __name__ == "__main__":
-    scheduler = BackgroundScheduler()
-    # 每小时整点推送一次
-    scheduler.add_job(scheduled_task, 'cron', minute=0)
-    scheduler.start()
-    logging.info("Scheduler started")
+# ---------------- Flask 健康检查 ----------------
+@app.route("/")
+def index():
+    return "OK"
 
-    # 启动时立即推送一次
+# ---------------- 启动 ----------------
+if __name__ == "__main__":
+    # APScheduler 后台定时任务
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(scheduled_task, 'interval', hours=1, next_run_time=datetime.now())
+    scheduler.start()
+    logging.info("Starting Flask app with scheduler...")
+
+    # 启动时立即执行一次
     scheduled_task()
 
-    # 保持程序运行
-    try:
-        while True:
-            time.sleep(60)
-    except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown()
-        logging.info("Scheduler shutdown")
+    # Flask 绑定端口，让 Render Web Service 检测成功
+    app.run(host="0.0.0.0", port=10000)
